@@ -1,0 +1,2 @@
+class AccountInvalidException(Exception):
+    pass
