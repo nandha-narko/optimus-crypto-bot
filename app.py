@@ -5,6 +5,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRe
 from exchange.factory import Factory
 from exchange.exchangetype import ExchangeType
 from exception import AccountInvalidException
+from functools import partial
 
 import db
 
@@ -15,21 +16,26 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
                     level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-SELECT_TYPE, ENTER_APIKEY, ENTER_SECRETKEY = range(3)
+SETUP_TYPE, SETUP_APIKEY, SETUP_SECRETKEY = range(3)
 
-(SETUP, PRICE, ACCOUNT, ORDERS) = map(chr, range(4))
+(SETUP, PRICE, ACCOUNT, ORDERS, CURRENT_MENU, NEXT_STEP) = map(chr, range(6))
 
 factory = Factory()
+
+setup_text = "Step {}/3: You can skip this step using /skip or exit setup using /exit\n"
+
 
 def start(update, context):
     main_menu(update, context)
 
 def main_menu(update, context):
     keyboard = [[InlineKeyboardButton("Setup", callback_data=str(SETUP)),
-                 InlineKeyboardButton("Account Info", callback_data=str(ACCOUNT)),
+                 InlineKeyboardButton(
+                     "Account Info", callback_data=str(ACCOUNT)),
                  InlineKeyboardButton("Price", callback_data=str(PRICE))]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    update.message.reply_text("Hey " + update.effective_user.first_name + "!, What do you like to do today?", reply_markup=reply_markup)
+    send_message(update, "Hey " + update.effective_user.first_name +
+                              "!, What do you like to do today?", reply_markup)
 
 def setup(update, context):
     chatid = update.effective_chat.id
@@ -38,43 +44,37 @@ def setup(update, context):
     reply_markup = InlineKeyboardMarkup(keyboard)
     # context.bot.send_message(
     #     chat_id=chatid, text="Select Account Type", reply_markup=reply_markup)
-    update.callback_query.edit_message_text(
-        text="Please provide your Api Key:", reply_markup=reply_markup)
-    return SELECT_TYPE
+    send_message(update, setup_text.format(1) + "Select Exchange:", reply_markup)
+    context.user_data[CURRENT_MENU] = "Setup"
+    return SETUP_TYPE
 
-
-def select_type(update, context):
+def setup_type(skip, update, context):
     user = update.effective_user
-    logger.info("Exchange type of %s: %s", user.first_name,
-                update.callback_query.data)
-    db.update_user(user.username, { 'exchange_type': ExchangeType[update.callback_query.data].name })
-    update.callback_query.edit_message_text(text="Please provide your Api Key:")
-    return ENTER_APIKEY
+    if not skip:
+        logger.info("Exchange type of %s: %s", user.first_name,
+                    update.callback_query.data)
+        db.update_user(user.username, {
+                       'exchange_type': ExchangeType[update.callback_query.data].name})
+    send_message(update, setup_text.format(2) + "Please provide your Api Key:")
+    return SETUP_APIKEY
 
-
-def enter_apikey(update, context):
+def setup_apikey(skip, update, context):
     user = update.message.from_user
-    logger.info("Api Key of %s: %s", user.first_name, update.message.text)
-    db.update_user(user.username, { 'api_key': update.message.text })
-    update.message.reply_text('Please provide your Secret Key:')
-    return ENTER_SECRETKEY
+    if not skip:
+        logger.info("Api Key of %s: %s", user.first_name, update.message.text)
+        db.update_user(user.username, {'api_key': update.message.text})
+    send_message(update, setup_text.format(3) + 'Please provide your Secret Key:')
+    return SETUP_SECRETKEY
 
-
-def enter_secretkey(update, context):
+def setup_secretkey(skip, update, context):
     user = update.message.from_user
-    logger.info("Secret Key of %s: %s",
-                user.first_name, update.message.text)
-    db.update_user(user.username, { 'secret_key': update.message.text })
-    update.message.reply_text('Bingo! Your account is now ready.')
+    if not skip:
+        logger.info("Secret Key of %s: %s",
+                    user.first_name, update.message.text)
+        db.update_user(user.username, {'secret_key': update.message.text})
+        send_message(update, 'Bingo! Your account is now ready.')
 
-    return ConversationHandler.END
-
-def cancel(update, context):
-    user = update.message.from_user
-    logger.info("User %s canceled conversation.", user.first_name)
-    update.message.reply_text('Bye!.',
-                              reply_markup=ReplyKeyboardRemove())
-
+    context.user_data[CURRENT_MENU] = None
     return ConversationHandler.END
 
 def price(update, context):
@@ -84,28 +84,27 @@ def price(update, context):
 
     if update.callback_query != None:
         if update.callback_query.data != str(PRICE) and str(PRICE) in update.callback_query.data:
-            if context.args == None: context.args = []
-            context.args.append(update.callback_query.data.replace(str(PRICE), ""))
+            if context.args == None:
+                context.args = []
+            context.args.append(
+                update.callback_query.data.replace(str(PRICE), ""))
 
     if context.args != None and len(context.args) > 0:
         priceInfo = exchange.get_price(context.args[0])
         message = "Price not available at the moment"
-        if priceInfo != None: message = 'Price of ' + priceInfo['symbol'] + " is : " + priceInfo['price']
-
-        if update.callback_query != None:
-            update.callback_query.edit_message_text(text=message)
-        else:
-            update.message.reply_text(text=message)
+        if priceInfo != None:
+            if priceInfo['symbol'] not in user['symbols']:
+                db.update_symbols(tuser.username, priceInfo['symbol'])
+            message = 'Price of ' + \
+                priceInfo['symbol'] + " is : " + priceInfo['price']
+        send_message(update, message)
     else:
         keyboard = []
-        for symbol in exchange.get_symbols():
+        for symbol in user['symbols']:
             keyboard.append(InlineKeyboardButton(
                 symbol, callback_data=str(PRICE) + symbol))
         reply_markup = InlineKeyboardMarkup([keyboard])
-        if update.callback_query != None:
-            update.callback_query.edit_message_text(text="Please select a Symbol", reply_markup=reply_markup)
-        else:
-            update.message.reply_text(text="Please select a Symbol", reply_markup=reply_markup)
+        send_message(update, "Please select a Symbol", reply_markup)
 
 def account(update, context):
     message = ""
@@ -119,16 +118,30 @@ def account(update, context):
         message = "Your account seems to be invalid. Please configure your account using /m or /s"
     send_message(update, message)
 
-def send_message(update, message: str):
+def send_message(update, message: str, reply_markup: InlineKeyboardMarkup = None):
     if update.callback_query != None:
-        update.callback_query.edit_message_text(text=message)
+        if reply_markup != None:
+            update.callback_query.edit_message_text(text=message, reply_markup=reply_markup)
+        else:
+            update.callback_query.edit_message_text(text=message)
     else:
-        update.message.reply_text(text=message)
+        if reply_markup != None:
+            update.message.reply_text(text=message, reply_markup=reply_markup)
+        else:
+            update.message.reply_text(text=message)
+
+def exit(update, context):
+    user = update.effective_user
+    logger.info("User %s exited %s.", user.first_name,
+                context.user_data[CURRENT_MENU])
+    update.message.reply_text('You have exited {}.'.format(context.user_data[CURRENT_MENU]),
+                              reply_markup=ReplyKeyboardRemove())
+    context.user_data[CURRENT_MENU] = None
+    return ConversationHandler.END
 
 def unknown(update, context):
     context.bot.send_message(chat_id=update.effective_chat.id,
                              text="Invalid command!. Please try /help to view the supported commands")
-
 
 def help(update, context):
     update.message.reply_text(
@@ -142,7 +155,6 @@ def help(update, context):
 def error(update, context):
     """Log Errors caused by Updates."""
     logger.warning('Error occured "%s"', context.error)
-
 
 def main():
     updater = Updater(
@@ -158,12 +170,13 @@ def main():
             setup, pattern='^(' + str(SETUP) + ')$')],
 
         states={
-            SELECT_TYPE: [CallbackQueryHandler(select_type, pattern='^' + ExchangeType.Binance.name + '$|^' + ExchangeType.Others.name + '$')],
-            ENTER_APIKEY: [MessageHandler(Filters.text, enter_apikey)],
-            ENTER_SECRETKEY: [MessageHandler(Filters.text, enter_secretkey)]
+            SETUP_TYPE: [CallbackQueryHandler(partial(setup_type, True), pattern='^' + ExchangeType.Binance.name + '$|^' + ExchangeType.Others.name + '$'), CommandHandler('skip', partial(setup_type, True))],
+            SETUP_APIKEY: [MessageHandler(Filters.text, setup_apikey), CommandHandler('skip', partial(setup_apikey, True))],
+            SETUP_SECRETKEY: [MessageHandler(Filters.text, setup_secretkey), CommandHandler(
+                'skip', partial(setup_secretkey, True))]
         },
 
-        fallbacks=[CommandHandler('cancel', cancel)]
+        fallbacks=[CommandHandler('exit', exit)]
     )
 
     dp.add_handler(setup_conv_handler)
@@ -185,7 +198,6 @@ def main():
 
     updater.start_polling()
     updater.idle()
-
 
 if __name__ == "__main__":
     main()

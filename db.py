@@ -15,7 +15,8 @@ def initialize():
             'username': 'nandhakumars',
             'exchange_type': ExchangeType.Binance.name,
             'api_key': '7LahfGm0mG1Wvl7J4QZ0UkaH3C6YiWym4LYR8DSPlNHyDYp8kOpLAzkkTnhOIlLL',
-            'secret_key': 'mrhjlw2VPZUG3UgLPrCV2Ody4gTX17XdoFC5EwkaaavWXfaa7aXs3Ykqw4iRRkuh'
+            'secret_key': 'mrhjlw2VPZUG3UgLPrCV2Ody4gTX17XdoFC5EwkaaavWXfaa7aXs3Ykqw4iRRkuh',
+            'symbols': ['LTCBTC']
         })
 
 def get_user(username):
@@ -25,7 +26,8 @@ def get_user(username):
             'username': username,
             'exchange_type': ExchangeType.Others,
             'api_key': '',
-            'secret_key': ''
+            'secret_key': '',
+            'symbols': ['LTCBTC']
         })
     return users.get(User.username == username)
 
@@ -33,3 +35,11 @@ def update_user(username, update):
     users = the_db.table('users')
     print("Updating user: {}".format(username))
     users.update(update, User.username == username)
+
+def update_symbols(username, symbol):
+    users = the_db.table('users')
+    user = users.get(User.username == username)
+    if user != None:
+        symbols = user['symbols']
+        symbols.append(symbol)
+        users.update({ 'symbols': symbols }, User.username == username)
